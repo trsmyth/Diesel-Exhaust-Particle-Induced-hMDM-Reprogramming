@@ -1,0 +1,436 @@
+---
+title: "Seahorse XF Analysis"
+author: "Timothy Smyth"
+date: "2024-04-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Seahorse XF Analysis
+
+### This script imports, analyzes, and visualizes the results of Seahorse XF modified mito stress test assays across indicated polarization states and DEP exposures.
+
+Prepare the environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # clears global environ.
+
+# Load packages
+library(tidyverse) # for data cleaning
+library(pheatmap) # for making heatmap
+library(ggfortify) # for PCA
+library(factoextra) # for PCA 
+library(ggplot2) # for plotting
+library(RColorBrewer) # for color palette
+library(ggpubr) # for statistics and graphing
+library(broom) # for ANOVA
+library(xlsx) # for exporting significance table
+```
+
+### Import data and calculate OCR/ECAR endpoints according to the methods established in:
+
+Van den Bossche, Jan, Jeroen Baardman, and Menno PJ de Winther.
+"Metabolic characterization of polarized M1 and M2 bone marrow-derived
+macrophages using real-time extracellular flux analysis."
+JoVE (Journal of Visualized Experiments) 105 (2015): e53424.
+
+```{r}
+# Import data
+OCR <- read.csv("OCR_Data_for_R.csv", fileEncoding="UTF-8-BOM")
+ECAR <- read.csv("ECAR_Data_for_R.csv", fileEncoding = "UTF-8-BOM")
+
+# Make data frames
+OCR <- data.frame(OCR, row.names = OCR$Full.Name)
+ECAR <- data.frame(ECAR, row.names = ECAR$Full.Name)
+
+# Calculate mean values for each biological replicate for each injection phase
+Basal_OCR <- rowMeans(subset(OCR[6:8]))
+Glucose_OCR <- rowMeans(subset(OCR[9:11]))
+Oligo_OCR <- rowMeans(subset(OCR[12:14]))
+FCCP_OCR <- rowMeans(subset(OCR[15:17]))
+ROT_OCR <- rowMeans(subset(OCR[18:20]))
+
+# Merge mean results into one data frame, adding Treatment ID as column
+OCR_means <- data.frame(OCR$Treatment, Basal_OCR, Glucose_OCR, Oligo_OCR, FCCP_OCR, ROT_OCR)
+colnames(OCR_means) <- c('Treatment', 'Basal', 'Glucose', 'Oligomycin', 'FCCP', 'Rot.Aa')
+
+# Repeat for ECAR measurements
+Basal_ECAR <- rowMeans(subset(ECAR[6:8]))
+Glucose_ECAR <- rowMeans(subset(ECAR[9:11]))
+Oligo_ECAR <- rowMeans(subset(ECAR[12:14]))
+FCCP_ECAR <- rowMeans(subset(ECAR[15:17]))
+ROT_ECAR <- rowMeans(subset(ECAR[18:20]))
+
+ECAR_means <- data.frame(ECAR$Treatment, Basal_ECAR, Glucose_ECAR, Oligo_ECAR, FCCP_ECAR, ROT_ECAR)
+colnames(ECAR_means) <- c('Treatment', 'Basal', 'Glucose', 'Oligomycin', 'FCCP', 'Rot.Aa')
+
+###################################################################################################
+
+# Calculate Seahorse values from data frames created above
+# See following citation for description/method of analysis:
+# Van den Bossche, Jan, Jeroen Baardman, and Menno PJ de Winther. 
+# "Metabolic characterization of polarized M1 and M2 bone marrow-derived 
+# macrophages using real-time extracellular flux analysis." 
+# JoVE (Journal of Visualized Experiments) 105 (2015): e53424.
+
+###################################################################################################
+
+# ECAR Calculations
+Non_glycolytic_acidification <- ECAR_means$Basal
+Glycolysis <- ECAR_means$Glucose - ECAR_means$Basal
+Maximum_Glycolytic_Rate <- ECAR_means$Oligomycin - ECAR_means$Basal
+Glycolytic_Reserve <- ECAR_means$Oligomycin - ECAR_means$Glucose
+
+#OCR Calculations
+Non_mitochondrial_Respiration <- OCR_means$Rot.Aa
+Basal_Respiration <- OCR_means$Glucose - OCR_means$Rot.Aa
+ATP_Production <- OCR_means$Glucose - OCR_means$Oligomycin
+Proton_Leak <- OCR_means$Oligomycin - OCR_means$Rot.Aa
+Maximum_Respiration <- OCR_means$FCCP - OCR_means$Rot.Aa
+SRC <- OCR_means$FCCP - OCR_means$Glucose
+
+# Assemble results into data frames for exporting 
+ECAR_by_Full.Name <- data.frame(ECAR_means, Non_glycolytic_acidification, Glycolysis, Maximum_Glycolytic_Rate, Glycolytic_Reserve)
+OCR_by_Full.Name <- data.frame(OCR_means, Non_mitochondrial_Respiration, Basal_Respiration, ATP_Production, Proton_Leak, Maximum_Respiration, SRC)
+
+# Export for graphing and statistical analysis outside of R
+write.xlsx(OCR_by_Full.Name, 'OCR_ECAR_Means.xlsx', sheetName = 'OCR_Full', row.names = TRUE, append = FALSE)
+write.xlsx(ECAR_by_Full.Name, 'OCR_ECAR_Means.xlsx', sheetName = 'ECAR_Full', row.names = TRUE, append = TRUE)
+```
+
+### In the original publication, OCR/ECAR data was exported above and analyzed for statistical differences and graphed using graphpad prism. Here, an alternative is presented. This section describes the application of 2-way repeated measures ANOVA with Fisher LSD using R rather than graphpad.
+
+```{r}
+# Combine data for statistics
+MDM_df <- data.frame(OCR[, c(1:4)], 
+                     OCR_by_Full.Name[, c('Treatment', 
+                                          'Basal_Respiration', 
+                                          'Maximum_Respiration', 
+                                          'SRC')], 
+                     ECAR_by_Full.Name[, c('Glycolysis', 
+                                           'Maximum_Glycolytic_Rate',
+                                           'Glycolytic_Reserve')])
+
+MDM_df$ID <- substr(MDM_df$Full.Name, 
+                    start = nchar(MDM_df$Full.Name)-6, 
+                    stop = nchar(MDM_df$Full.Name))
+
+MDM_df <- MDM_df %>% select(ID, everything())
+
+# Create data frame with mean values of each target for testing of differences
+mean_df <- MDM_df %>% group_by(Treatment) %>% summarize(across(everything(),mean))
+mean_df <- data.frame(mean_df[5:ncol(mean_df)], row.names = mean_df$Treatment)
+
+# Arrange rows as listed
+mean_df <- mean_df %>% arrange(factor(rownames(mean_df), 
+                                      c("M0_Vehicle", "M2_Vehicle", 
+                                        "M0 -> M1", "M2 -> M1",
+                                        "M0_DEP", "M2_DEP", 
+                                        "M0 -> M1+DEP", "M2 -> M1+DEP")))
+
+# Create row combinations to find differences
+Treatment1 <- seq(1,nrow(mean_df)) 
+Treatment2 <- Treatment1
+
+# Calculate differences in groups
+mean_differences <- expand.grid(Treatment1, Treatment2) %>% # Expand to match sequences
+  filter(Var1 > Var2) %>% # Keep rows where Var1 > Var2
+  mutate(abs(mean_df[Var1, ] - mean_df[Var2, ])) # Calculate abs value of Var1 - Var2
+
+# Replace var with Treatment name
+mean_differences <- mean_differences %>% mutate(Var2 = 
+                                                  case_when(str_detect(Var2, '1') ~ "M0_Vehicle",
+                                                            str_detect(Var2, '2') ~ "M2_Vehicle",
+                                                            str_detect(Var2, '3') ~ "M0 -> M1",
+                                                            str_detect(Var2, '4') ~ "M2 -> M1",
+                                                            str_detect(Var2, '5') ~ "M0_DEP", 
+                                                            str_detect(Var2, '6') ~ "M2_DEP", 
+                                                            str_detect(Var2, '7') ~ "M0 -> M1+DEP", 
+                                                            str_detect(Var2, '8') ~ "M2 -> M1+DEP"))
+
+mean_differences <- mean_differences %>% mutate(Var1 = 
+                                                  case_when(str_detect(Var1, '1') ~ "M0_Vehicle",
+                                                            str_detect(Var1, '2') ~ "M2_Vehicle",
+                                                            str_detect(Var1, '3') ~ "M0 -> M1",
+                                                            str_detect(Var1, '4') ~ "M2 -> M1",
+                                                            str_detect(Var1, '5') ~ "M0_DEP", 
+                                                            str_detect(Var1, '6') ~ "M2_DEP", 
+                                                            str_detect(Var1, '7') ~ "M0 -> M1+DEP", 
+                                                            str_detect(Var1, '8') ~ "M2 -> M1+DEP"))
+
+# Isolate comparisons
+comparisons <- mean_differences[1:2]
+colnames(comparisons) <- c('group1', 'group2')
+
+# Set row names to Treatments compared in row
+mean_differences <- data.frame(mean_differences[3:ncol(mean_differences)], 
+                               row.names = paste0(mean_differences$Var2, " : ", mean_differences$Var1))
+
+# Create vectors for storing results of stats
+Data_Test <- vector('list', ncol(MDM_df))
+anova <- vector('list', ncol(MDM_df))
+MSE <- vector('list', ncol(MDM_df))
+t_ratio <- vector('list', ncol(MDM_df))
+p_val <- vector('list', ncol(MDM_df))
+
+# Disable scientific notation
+options(scipen=999)
+
+# Run Two-Way RM ANOVA with Fisher LSD
+# t-ratio of comparison = 
+
+# [Difference between Treatments]/
+# sqrt([Mean squares of within group from anova]*(1/n[group1] + 1/n[group2]))
+
+# Individual p-values calculated from the resulting t-ratio with a DF of 8
+for(i in 7:ncol(MDM_df)) {  
+  
+  # Two-Way RM Anova
+  Data_Test[[i]] <- tidy(aov(MDM_df[, i] ~ Starting * Exposure 
+                             + Error(ID / (Starting * Exposure))
+                             , data = MDM_df))
+  
+  # Isolate anova p-value for graphing
+  anova[[i]] <- round(Data_Test[[i]][6, "p.value"], 4)
+  
+  # Rename column to p
+  colnames(anova[[i]])[1] <- 'p'
+  
+  # Set values rounded to below 0.0001 to <0.0001
+  anova[[i]]$p[anova[[i]]$p<0.0001] <- '<0.0001'
+  
+  # Mean Square Error
+  MSE[[i]] <- sqrt(((1/5 + 1/5) * Data_Test[[i]][7,"meansq"]))
+  
+  # t ratio
+  t_ratio[[i]] <- mean_differences[[i-4]]/as.numeric(MSE[[i]])
+  
+  # p-value of two-tailed test, rounded to 4 digits
+  p_val[[i]] <- round(2*pt(t_ratio[[i]], 8, lower.tail = FALSE), 4)
+  
+  # Add comparisons to p-values
+  p_val[[i]] <- data.frame(comparisons, p_val[[i]])
+  
+  # rename p value column to p
+  colnames(p_val[[i]])[3] = 'p'
+  
+  # Set values rounded to below 0.0001 to <0.0001
+  p_val[[i]]$p[p_val[[i]]$p<0.0001] <- '<0.0001'
+  
+  # Add columns to set initial polarization ID
+  p_val[[i]]$Match <- 'NA'
+  
+  # Check groups for matching within initial polarization state
+  # or within final treatment condition and mark as a match for subsetting
+  # For example, comparison of all M0 groups and comparison of M0_Vehicle 
+  # with M2_Vehicle is preserved, while M0_Vehicle vs M2_DEP is not preserved
+  p_val[[i]] <- p_val[[i]] %>% mutate(Match =
+                                        case_when(str_detect(group1, 'M0') &
+                                                    str_detect(group2, 'M0') ~ 'Match',
+                                                  
+                                                  str_detect(group1, 'M2') &
+                                                    str_detect(group2, 'M2') ~ 'Match',
+                                                  
+                                                  str_detect(group1, 'Vehicle') &
+                                                    str_detect(group2, 'Vehicle') ~ 'Match',
+                                                  
+                                                  str_detect(group1, '[\\+]') &
+                                                    str_detect(group2, '[\\+]') ~ 'Match',
+                                                  
+                                                  str_detect(group1, 'M2 -> M1') &
+                                                    str_detect(group2, 'M0 -> M1') & 
+                                                    !str_detect(group1, '[\\+]') ~ 'Match',
+                                                  
+                                                  str_detect(group1, '_DEP') &
+                                                    str_detect(group2, '_DEP') ~ 'Match',
+                                                  
+                                                  TRUE ~ as.character(.$Match)))
+  
+  p_val[[i]] <- subset(p_val[[i]], Match == 'Match')
+  
+}
+
+# Creating a function to calculate the SEM
+stderror <- function(x) sd(x)/sqrt(length(x)) 
+
+# Removing unneeded information from all data, retaining only Treatment ID
+Mean <- MDM_df[-c(1:5)] 
+
+# Calculating the average rounded to 2 sig figs +/- SEM
+Mean = Mean %>% 
+  group_by(Treatment) %>% 
+  summarize(across(everything(), 
+                   function(x) {
+                     paste(round(mean(x),2), 
+                           "\u00b1", 
+                           round(stderror(x), 2))}))
+
+Mean <- data.frame(Mean[,], row.names = Mean$Treatment) # Making results into a data frame
+Mean <- Mean[-c(1)] # Removing treatment column as row names are treatment IDs
+names(Mean) <- gsub("\\.", "", names(Mean)) # Removing . from column names
+Mean <- t(Mean)
+Mean <- as.data.frame(Mean[, c("M0_Vehicle", 'M2_Vehicle', 'M0_DEP', 'M2_DEP',
+                               "M0 -> M1", "M2 -> M1", "M0 -> M1+DEP", "M2 -> M1+DEP")])
+
+# Exporting results into an Excel file
+write.xlsx(Mean, 'Seahorse_Mean_SEM.xlsx',
+           sheetName = 'Means',
+           row.names = TRUE,
+           append = FALSE)
+```
+
+### Here, OCR/ECAR results are graphed and the results of the statistics calculated above are added. Each figure is saved as a seperate .tiff file.
+
+```{r}
+# Order for groups on graph
+level_order <- c("M0_Vehicle", "M0 -> M1", "M0_DEP", "M0 -> M1+DEP",
+                 "M2_Vehicle", "M2 -> M1", "M2_DEP", "M2 -> M1+DEP")
+
+# Set vector for plots to be assigned during loop
+myplot <- vector('list', ncol(MDM_df)) 
+y_pos <- vector('list', ncol(MDM_df))
+y_min <- vector('list', ncol(MDM_df))
+y_max <- vector('list', ncol(MDM_df))
+anov_pos <- vector('list', ncol(MDM_df))
+
+# Identify maximum value of each analyte to set y axis
+max <- sapply(MDM_df, max)
+max <- as.numeric(max)
+
+min <- sapply(MDM_df, min)
+min <- as.numeric(min)
+
+# Make a plot for each target in a loop
+for(i in 7:ncol(MDM_df)) {
+  
+  # If/else to determine y-axis limits and stats y position
+  # If the absolute value of the lower limit is greater than the upper limit, 
+  # make the lower limit larger and have the stats appear below the data
+  # else make the upper limit larger and have stats appear on the top of the data
+  if(abs(min[[i]]) > abs(max[[i]])){
+    
+    anov_pos[[i]] <- as.numeric(min[[i]]*2.75)
+
+    y_min[[i]] <- as.numeric(min[[i]]*2.8)
+    y_max[[i]] <- as.numeric(max[[i]]*1.25)
+    
+    y_pos[[i]] <- c(min[[i]]*2.2, 
+                    
+                    min[[i]]*1.15, min[[i]]*1.3, min[[i]]*1.45, 
+                    min[[i]]*1.15, min[[i]]*1.3, min[[i]]*1.45,
+                    
+                    min[[i]]*2.35, 
+                    
+                    min[[i]]*1.6, min[[i]]*1.75, 
+                    min[[i]]*1.6, min[[i]]*1.75,
+                    
+                    min[[i]]*2.5, 
+                    
+                    min[[i]]*1.9, 
+                    min[[i]]*1.9, 
+                    
+                    min[[i]]*2.65)
+                    
+  } 
+  
+  else {
+    
+    anov_pos[[i]] <- as.numeric(max[[i]]*2.75)
+
+    y_min[[i]] <- as.numeric(min[[i]]*1.25)
+    y_max[[i]] <- as.numeric(max[[i]]*2.8)
+    
+    y_pos[[i]] <- c(max[[i]]*2.2, 
+                    
+                    max[[i]]*1.15, max[[i]]*1.3, max[[i]]*1.45, 
+                    max[[i]]*1.15, max[[i]]*1.3, max[[i]]*1.45,
+                    
+                    max[[i]]*2.35, 
+                    
+                    max[[i]]*1.6, max[[i]]*1.75, 
+                    max[[i]]*1.6, max[[i]]*1.75,
+                    
+                    max[[i]]*2.5, 
+                    
+                    max[[i]]*1.9, 
+                    max[[i]]*1.9, 
+                    
+                    max[[i]]*2.65)
+    
+  }
+  
+  # Make one plot per gene, saving it in myplot location [[i]]
+  myplot[[i]]<- ggplot(MDM_df, 
+                       aes(x = factor(Treatment, 
+                                      level = level_order), 
+                                  y = MDM_df[, i])) + 
+    
+    # Add bars with line at mean
+    geom_bar(aes(col=Treatment), 
+             position = position_dodge(),
+             fill = 'white', 
+             stat = "summary", 
+             fun = "mean", 
+             show.legend = FALSE) +
+    
+    # Add individual data points
+    geom_jitter(aes(col=Treatment), 
+                width = 0.25, 
+                show.legend = FALSE) + 
+    
+    # Add a dashed horizontal line at y=0
+    geom_hline(yintercept=0, 
+               linetype = "dashed") +
+    
+    # Add anova p-value
+    annotate("text", 
+             x = 1.5, 
+             y = anov_pos[[i]], 
+             label = paste0("ANOVA, p = ", anova[[i]])) +
+    
+    # Add the stats saved in statistics data frame
+    stat_pvalue_manual(p_val[[i]], # location where p values are stored
+                       y.position = y_pos[[i]], # where on y axis p values/lines should locate
+                       label = "p", # name of column in t_test[[i]] where p values stored
+                       size = 3.5, # size of labels
+                       bracket.size = 0.01, # thickness of lines
+                       tip.length = 0, # remove tips from lines
+                       vjust = 0.25 # puts p value on comparison line
+                       ) +
+    
+    # Add SEM bars
+    stat_summary(geom = "errorbar", 
+                 fun.data = mean_se, 
+                 position = "dodge", 
+                 width = 0.25) +
+    
+    # Label x and y axis
+    labs(title = names(MDM_df)[i],
+         x = "Treatment", 
+         y = ifelse(names(MDM_df)[i] == 'Basal_Respiration' |
+                      names(MDM_df)[i] == 'Maximum_Respiration' |
+                      names(MDM_df)[i] == 'SRC', 
+         'OCR (pmol/min/nuclei)', 
+         'ECAR (mpH/min/nuclei)')) + 
+    
+    # Set axis label sizing and presentation angle	
+    theme(axis.text.x = element_text(face = "bold", size = 14)) + 
+    theme(axis.text.x = element_text(angle = 90)) +	
+    theme(axis.text.y = element_text(size = 14)) +
+    theme(axis.title.y = element_text(size = 16)) +
+    theme(axis.title.x = element_text(size = 16)) + 
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+    
+    # Sets legend order to match order of x-axis already on graph due to level_order
+    scale_color_discrete(breaks = level_order)
+    
+  file_name = paste(colnames(MDM_df)[i], ".tiff", sep="")
+  tiff(file_name, units="in", width=8, height=8, res=300)
+  print(myplot[[i]])
+  dev.off()
+  
+}
+```

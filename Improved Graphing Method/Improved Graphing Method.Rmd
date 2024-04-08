@@ -1,0 +1,361 @@
+---
+title: "Improved Graphing Method"
+author: "Timothy Smyth"
+date: "2024-04-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Improved Graphing Methods
+
+### This script describes an improved graphing method compared to the method implemented in:
+
+Smyth, Timothy, and Ilona Jaspers. "Diesel exhaust particles induce polarization state-dependent functional and transcriptional changes in human monocyte-derived macrophages." American Journal of Physiology-Lung Cellular and Molecular Physiology 326.1 (2024): L83-L97.
+
+Instead of adding statistics bars and values above or below bars causing the axis to stretch, bars and values are plotted in a separate plot and both plots are combined using patchwork::wrap_plots.
+
+Here, the Fluidigm data is used as an example.
+
+Start by setting up the environment
+
+```{r message = FALSE}
+rm(list = ls(all.names = TRUE)) # clears global environ.
+
+# Load packages
+library(tidyverse) # for data cleaning
+library(pheatmap) # for making heatmap
+library(ggfortify) # for PCA
+library(factoextra) # for PCA 
+library(ggplot2) # for plotting
+library(RColorBrewer) # for color palette
+library(ggpubr) # for statistics and graphing
+library(broom) # for ANOVA
+library(ggtext)
+library(patchwork)
+```
+
+### Load data and format for analysis
+
+```{r}
+# Import data
+Fluidigm <- read.csv("Fluidigm_Data_for_R.csv", fileEncoding="UTF-8-BOM")
+Fluidigm_df <- data.frame(Fluidigm, row.names = Fluidigm$Full.Name)
+Fluidigm_df <- Fluidigm_df[, 3:ncol(Fluidigm_df)]
+
+# Isolate Vehicle samples
+Veh_df <- subset(Fluidigm, Group == 'Vehicle') 
+Veh_df <- data.frame(Veh_df, row.names = Veh_df$Full.Name)
+Veh_df <- Veh_df[, 3:ncol(Veh_df)]
+
+# Isolate DEP samples
+DEP_df <- subset(Fluidigm, Group == 'DEP') 
+DEP_df <- data.frame(DEP_df, row.names = DEP_df$Full.Name)
+DEP_df <- DEP_df[, 3:ncol(DEP_df)]
+
+# Remove periods from column names
+names(Fluidigm) <- gsub("\\.", "", names(Fluidigm))
+names(Fluidigm_df) <- gsub("\\.", "", names(Fluidigm_df))
+names(Veh_df) <- gsub("\\.", "", names(Veh_df))
+names(DEP_df) <- gsub("\\.", "", names(DEP_df))
+```
+
+### Perform 2-way RM ANOVA with fisher's LSD
+
+```{r}
+# Create data frame with mean values of each target for testing of differences
+mean_df <- Fluidigm_df %>% group_by(Treatment) %>% summarize(across(everything(),mean))
+mean_df <- data.frame(mean_df[5:ncol(mean_df)], row.names = mean_df$Treatment)
+
+# Arrange rows as listed
+mean_df <- mean_df %>% arrange(factor(rownames(mean_df), 
+                                      c("M0_Vehicle", "M2_Vehicle", 
+                                        "M0 -> M1", "M2 -> M1",
+                                        "M0_DEP", "M2_DEP", 
+                                        "M0 -> M1+DEP", "M2 -> M1+DEP")))
+
+# Create row combinations to find differences
+Treatment1 <- seq(1,nrow(mean_df)) 
+Treatment2 <- Treatment1
+
+# Calculate differences in groups
+mean_differences <- expand.grid(Treatment1, Treatment2) %>% # Expand to match sequences
+  filter(Var1 > Var2) %>% # Keep rows where Var1 > Var2
+  mutate(abs(mean_df[Var1, ] - mean_df[Var2, ])) # Calculate abs value of Var1 - Var2
+
+# Replace var with Treatment name
+mean_differences <- mean_differences %>% mutate(Var2 = 
+                                                  case_when(str_detect(Var2, '1') ~ "M0_Vehicle",
+                                                            str_detect(Var2, '2') ~ "M2_Vehicle",
+                                                            str_detect(Var2, '3') ~ "M0 -> M1",
+                                                            str_detect(Var2, '4') ~ "M2 -> M1",
+                                                            str_detect(Var2, '5') ~ "M0_DEP", 
+                                                            str_detect(Var2, '6') ~ "M2_DEP", 
+                                                            str_detect(Var2, '7') ~ "M0 -> M1+DEP", 
+                                                            str_detect(Var2, '8') ~ "M2 -> M1+DEP"))
+
+mean_differences <- mean_differences %>% mutate(Var1 = 
+                                                  case_when(str_detect(Var1, '1') ~ "M0_Vehicle",
+                                                            str_detect(Var1, '2') ~ "M2_Vehicle",
+                                                            str_detect(Var1, '3') ~ "M0 -> M1",
+                                                            str_detect(Var1, '4') ~ "M2 -> M1",
+                                                            str_detect(Var1, '5') ~ "M0_DEP", 
+                                                            str_detect(Var1, '6') ~ "M2_DEP", 
+                                                            str_detect(Var1, '7') ~ "M0 -> M1+DEP", 
+                                                            str_detect(Var1, '8') ~ "M2 -> M1+DEP"))
+
+# Isolate comparisons
+comparisons <- mean_differences[1:2]
+colnames(comparisons) <- c('group1', 'group2')
+
+# Set row names to Treatments compared in row
+mean_differences <- data.frame(mean_differences[3:ncol(mean_differences)], 
+                               row.names = paste0(mean_differences$Var2, " : ", mean_differences$Var1))
+
+# Create vectors for storing results of stats
+Data_Test <- vector('list', ncol(Fluidigm))
+anova <- vector('list', ncol(Fluidigm))
+MSE <- vector('list', ncol(Fluidigm))
+t_ratio <- vector('list', ncol(Fluidigm))
+p_val <- vector('list', ncol(Fluidigm))
+
+# Disable scientific notation
+options(scipen=999)
+
+# Run Two-Way RM ANOVA with Fisher LSD
+# t-ratio of comparison = 
+
+# [Difference between Treatments]/
+# sqrt([Mean squares of within group from anova]*(1/n[group1] + 1/n[group2]))
+
+# Individual p-values calculated from the resulting t-ratio with a DF of 8
+for(i in 7:ncol(Fluidigm)) {  
+  
+  # Two-Way RM Anova
+  Data_Test[[i]] <- tidy(aov(Fluidigm[, i] ~ Starting * Exposure 
+                             + Error(ID / (Starting * Exposure))
+                             , data = Fluidigm))
+  
+  # Isolate anova p-value for graphing
+  anova[[i]] <- round(Data_Test[[i]][6, "p.value"], 4)
+  
+  # Rename column to p
+  colnames(anova[[i]])[1] <- 'p'
+  
+  # Set values rounded to below 0.0001 to <0.0001
+  anova[[i]]$p[anova[[i]]$p<0.0001] <- '<0.0001'
+  
+  # Mean Square Error
+  MSE[[i]] <- sqrt(((1/5 + 1/5) * Data_Test[[i]][7,"meansq"]))
+  
+  # t ratio
+  t_ratio[[i]] <- mean_differences[[i-6]]/as.numeric(MSE[[i]])
+  
+  # p-value of two-tailed test, rounded to 4 digits
+  p_val[[i]] <- round(2*pt(t_ratio[[i]], 8, lower.tail = FALSE), 4)
+  
+  # Add comparisons to p-values
+  p_val[[i]] <- data.frame(comparisons, p_val[[i]])
+  
+  # rename p value column to p
+  colnames(p_val[[i]])[3] = 'p'
+  
+  # Set values rounded to below 0.0001 to <0.0001
+  p_val[[i]]$p[p_val[[i]]$p<0.0001] <- '<0.0001'
+  
+  # Add columns to set initial polarization ID
+  p_val[[i]]$Match <- 'NA'
+  
+  # Check groups for matching within initial polarization state
+  # or within final treatment condition and mark as a match for subsetting
+  # For example, comparison of all M0 groups and comparison of M0_Vehicle 
+  # with M2_Vehicle is preserved, while M0_Vehicle vs M2_DEP is not preserved
+  p_val[[i]] <- p_val[[i]] %>% mutate(Match =
+                                        case_when(str_detect(group1, 'M0') &
+                                                    str_detect(group2, 'M0') ~ 'Match',
+                                                  
+                                                  str_detect(group1, 'M2') &
+                                                    str_detect(group2, 'M2') ~ 'Match',
+                                                  
+                                                  str_detect(group1, 'Vehicle') &
+                                                    str_detect(group2, 'Vehicle') ~ 'Match',
+                                                  
+                                                  str_detect(group1, '[\\+]') &
+                                                    str_detect(group2, '[\\+]') ~ 'Match',
+                                                  
+                                                  str_detect(group1, 'M2 -> M1') &
+                                                    str_detect(group2, 'M0 -> M1') & 
+                                                    !str_detect(group1, '[\\+]') ~ 'Match',
+                                                  
+                                                  str_detect(group1, '_DEP') &
+                                                    str_detect(group2, '_DEP') ~ 'Match',
+                                                  
+                                                  TRUE ~ as.character(.$Match)))
+  
+  p_val[[i]] <- subset(p_val[[i]], Match == 'Match')
+  
+}
+```
+
+### Graph the data without statistics
+
+```{r}
+# Order for groups on graph
+level_order <- c("M0_Vehicle", "M0 -> M1", "M0_DEP", "M0 -> M1+DEP",
+                 "M2_Vehicle", "M2 -> M1", "M2_DEP", "M2 -> M1+DEP")
+
+# Set vector for plots to be assigned during loop
+myplot <- vector('list', ncol(Fluidigm)) 
+
+# Make a plot for each target in a loop
+for(i in 7:ncol(Fluidigm)) {
+  
+  # Make one plot per gene, saving it in myplot location [[i]]
+  myplot[[i]]<- ggplot(Fluidigm, 
+                       aes(x = factor(Treatment, 
+                                      level = level_order), 
+                                  y = Fluidigm[, i])) + 
+    
+    # Add bars with line at mean
+    geom_bar(aes(col=Treatment), 
+             position = position_dodge(),
+             fill = 'white', 
+             stat = "summary", 
+             fun = "mean", 
+             show.legend = FALSE) +
+    
+    # Add individual data points
+    geom_jitter(aes(col=Treatment), 
+                width = 0.25, 
+                size = 6,
+                show.legend = FALSE) + 
+    
+    # Add a dashed horizontal line at y=0
+    geom_hline(yintercept=0, 
+               linetype = "dashed") +
+    
+    # Add SEM bars
+    stat_summary(geom = "errorbar", 
+                 fun.data = mean_se, 
+                 position = "dodge", 
+                 width = 0.25) +
+    
+    # Label x and y axis
+    labs(title = NULL,
+         x = "Treatment", 
+         y = paste0("Log2 Fold Change\n", 
+                    colnames(Fluidigm)[i], 
+                    ' mRNA')) + 
+    
+    # Set axis label sizing and presentation angle	
+    theme(title = element_text(face = "bold", size = 18),
+          axis.text.x = element_text(face = "bold", size = 18, angle = 0),
+          axis.text.y = element_text(size = 16),
+          axis.title.y = element_text(size = 18),
+          axis.title.x = element_text(size = 18),
+          panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+    
+    # Sets legend order to match order of x-axis already on graph due to level_order
+    scale_color_discrete(breaks = level_order)
+  
+}
+```
+
+### Create the statistics graphs
+
+The p_val data frames are reorganized by row to match desired layouts. Here, M0 groups, then M2 groups, then M0 vs M2 groups are ordered. 
+
+Then, decide the x axis location for each p-value to be placed. This aims to get the value in the center of the corresponding statistic bar.
+
+Then, decide the y axis location for each p-value to be placed. This aims to place the value right above the statistic bar.
+
+```{r}
+anov_pos <- vector('list', ncol(Fluidigm))
+mystats <- vector('list', ncol(Fluidigm))
+
+for(i in 7:ncol(Fluidigm)) {
+  
+  p_val[[i]] <- p_val[[i]][c(2, 3, 4, 9, 10, 14,
+                             5, 6, 7, 11, 12, 15,
+                             1, 8, 13, 16), ]
+
+  p_val[[i]]$pos_x <- c(1.5, 2, 2.5, 2.5, 3, 3.5,
+                        5.5, 6, 6.5, 6.5, 7, 7.5,
+                        3, 4, 5, 6)
+
+  p_val[[i]]$pos_y <- seq(from = 0.25,
+                          to = 0.25 * nrow(p_val[[i]]),
+                          0.25)
+  
+  # Make one plot per gene, saving it in myplot location [[i]]
+  mystats[[i]]<- ggplot(Fluidigm, 
+                       aes(x = factor(group2, 
+                                      level = level_order), 
+                                  y = Fluidigm[, i])) + 
+    
+    geom_segment(data = p_val[[i]], 
+                 aes(x = group1, 
+                     xend = group2,
+                     y = pos_y, 
+                     yend = pos_y), 
+                 colour = "black", 
+                 linewidth = 1.25) +
+    
+    geom_text(data = p_val[[i]],
+              label = p_val[[i]]$p,
+              x = p_val[[i]]$pos_x,
+              y = p_val[[i]]$pos_y + 0.1,
+              colour = "black") +
+    
+    # Add anova p-value
+    annotate("text",
+             size = 8,
+             x = 1.5,
+             y = max(p_val[[i]]$pos_y),
+             label = paste0("ANOVA, p = ", anova[[i]])) +
+    
+    # Label x and y axis
+    labs(title = NULL,
+         x = "Treatment", 
+         y = paste0(colnames(Fluidigm)[i], "\nLog2 Fold Change mRNA")) + 
+    
+    # Set axis label sizing and presentation angle	
+    theme(title = element_text(face = "bold", size = 18),
+          axis.text.x = element_text(face = "bold", size = 18, angle = 0),
+          axis.text.y = element_text(size = 16),
+          axis.title.y = element_text(size = 18),
+          axis.title.x = element_text(size = 18),
+          panel.border = element_rect(colour = "black", fill=NA, size=1),
+          plot.margin = unit(c(0, 0, 0, 0), "cm")) +
+    
+    scale_x_discrete(limits = level_order) +
+    scale_y_continuous(limits = c(0, max(p_val[[i]]$pos_y) + 0.25))
+}
+```
+
+### Wrap the data and statistics plots together.
+
+The statistics plot is given theme_void() to remove axis labels and axis to make it not look like one continuous plot.
+
+The data plot has the legend removed. This prevents the statistics bar from extending beyond the data plot which is squished by the legend.
+
+```{r}
+for(i in 7:ncol(Fluidigm)){
+
+  tiff(paste0(colnames(Fluidigm)[i], '.tiff'), height = 1000, width = 1500)
+  
+  print(
+  wrap_plots(mystats[[i]] +  
+               theme_void(),
+             myplot[[i]] + 
+               theme(legend.position = "none"), 
+             ncol = 1,
+             heights = c(1.5, 2)) %>% 
+    ggdraw()
+  )
+  dev.off()
+  
+}
+```

@@ -1,0 +1,409 @@
+---
+title: "Meso Scale Discovery Analysis"
+author: "Timothy Smyth"
+date: "2024-04-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Meso Scale Discovery Analysis
+
+### This script imports, analyzes, and visualizes the results of Meso Scale V-PLEX Human Cytokine 30-Plex assays across indicated polarization states and DEP exposures.
+
+Prepare the environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # clears global environ.
+
+# Load packages
+library(tidyverse) # for data cleaning
+library(pheatmap) # for making heatmap
+library(ggfortify) # for PCA
+library(factoextra) # for PCA 
+library(ggplot2) # for plotting
+library(RColorBrewer) # for color palette
+library(ggpubr) # for statistics and graphing
+library(broom) # for ANOVA
+library(xlsx) # for exporting significance table
+```
+
+### Import data and format
+
+```{r}
+# Import data
+MSD <- read.csv("MSD_Data_for_R.csv", fileEncoding="UTF-8-BOM")
+MSD_df <- data.frame(MSD, row.names = MSD$Full.Name)
+MSD_df <- MSD_df[, 3:ncol(MSD_df)]
+
+Veh_df <- subset(MSD, Group == 'Vehicle') # Isolate Vehicle samples
+Veh_df <- data.frame(Veh_df, row.names = Veh_df$Full.Name) # Create Vehicle df
+Veh_df <- Veh_df[, 3:ncol(Veh_df)]
+
+DEP_df <- subset(MSD, Group == 'DEP') # Isolate DEP samples
+DEP_df <- data.frame(DEP_df, row.names = DEP_df$Full.Name) # Create DEP df
+DEP_df <- DEP_df[, 3:ncol(DEP_df)]
+
+# Remove periods from column names
+names(MSD) <- gsub("\\.", "", names(MSD))
+names(MSD_df) <- gsub("\\.", "", names(MSD_df))
+names(Veh_df) <- gsub("\\.", "", names(Veh_df))
+names(DEP_df) <- gsub("\\.", "", names(DEP_df))
+```
+
+### Create principal component analysis graphs for all data
+
+```{r}
+# Create a data frame with only mediator columns
+MSDDataPCA <- MSD_df[, 5:ncol(MSD_df)]
+
+# Log transform mediator data so that PCA plot isn't as bunched up.
+MSDDataPCA_log <- log(MSDDataPCA)
+
+# Run PCA
+pca.res <- prcomp(MSDDataPCA_log, center = TRUE, scale = TRUE)
+
+# Set theme
+theme_set(theme_bw())
+
+# All groups cluster plot
+fviz_pca_ind(pca.res,
+             label = "none",
+             habillage = MSD_df$Treatment, 
+             palette = "Dark2",
+             addEllipses = TRUE) + 
+  ggtitle("PCA - Clustering") +
+  theme(axis.title = element_text(size = 14), 
+        axis.text = element_text(size = 12), 
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+        panel.border = element_rect(fill = NA, color = "black", size = 0.3),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()) +
+  xlim(-10, 10)
+```
+
+### Create heatmaps of Vehicle or DEP exposed samples
+
+```{r}
+# Create summary data frame with means by group
+Veh_mean_df = Veh_df %>% group_by(Treatment) %>% summarize(across(everything(), mean))
+Veh_mean_df <- data.frame(Veh_mean_df[5:ncol(Veh_mean_df)], row.names = Veh_mean_df$Treatment)
+Veh_mean_df <- Veh_mean_df[c(2, 4, 1, 3), ]
+
+DEP_mean_df = DEP_df %>% group_by(Treatment) %>% summarize(across(everything(), mean))
+DEP_mean_df <- data.frame(DEP_mean_df[5:ncol(DEP_mean_df)], row.names = DEP_mean_df$Treatment)
+DEP_mean_df <- DEP_mean_df[c(2, 4, 1, 3), ]
+
+pheatmap(t(Veh_mean_df), 
+         color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdYlBu")))(100), # sets color scheme
+         display_numbers = TRUE,
+         number_color = "black",
+         fontsize_number = 8,
+         angle_col = c("45"), # makes column labels horizontal
+         cellwidth = 75, # sets dimensions of cells so that they don't change with viewer pane size
+         cellheight = 10, # sets dimensions of cells so that they don't change with viewer pane size
+         border_color = "black", # adds black border around cells
+         treeheight_col = 10, # sets dims of trees so that they don't change with viewer pane size
+         fontsize_row = 9, # sets dims of trees so that they don't change with viewer pane size
+         scale = 'row', # scales data by row
+         fontsize_col = 12, # sets font size for column labels
+         cutree_rows = 5, # indicates how many clusters to show separated by spaces
+         cluster_cols = FALSE, 
+         cluster_rows = TRUE)
+
+pheatmap(t(DEP_mean_df), 
+         color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdYlBu")))(100), # sets color scheme
+         display_numbers = TRUE,
+         number_color = "black",
+         fontsize_number = 8,
+         angle_col = c("45"), # makes column labels horizontal
+         cellwidth = 75, # sets dimensions of cells so that they don't change with viewer pane size
+         cellheight = 10, # sets dimensions of cells so that they don't change with viewer pane size
+         border_color = "black", # adds black border around cells
+         treeheight_col = 10, # sets dims of trees so that they don't change with viewer pane size
+         fontsize_row = 9, # sets dims of trees so that they don't change with viewer pane size
+         scale = 'row', # scales data by row
+         fontsize_col = 12, # sets font size for column labels
+         cutree_rows = 5, # indicates how many clusters to show separated by spaces
+         cluster_cols = FALSE, 
+         cluster_rows = TRUE)
+```
+
+### Perform 2-way RM ANOVA with fisher's LSD and export results
+
+```{r}
+# Create data frame with mean values of each target for testing of differences
+mean_df <- MSD_df %>% group_by(Treatment) %>% summarize(across(everything(),mean))
+mean_df <- data.frame(mean_df[5:ncol(mean_df)], row.names = mean_df$Treatment)
+
+# Arrange rows as listed
+mean_df <- mean_df %>% arrange(factor(rownames(mean_df), 
+                                      c("M0_Vehicle", "M2_Vehicle", 
+                                        "M0 -> M1", "M2 -> M1",
+                                        "M0_DEP", "M2_DEP", 
+                                        "M0 -> M1+DEP", "M2 -> M1+DEP")))
+
+# Create row combinations to find differences
+Treatment1 <- seq(1,nrow(mean_df)) 
+Treatment2 <- Treatment1
+
+# Calculate differences in groups
+mean_differences <- expand.grid(Treatment1, Treatment2) %>% # Expand to match sequences
+  filter(Var1 > Var2) %>% # Keep rows where Var1 > Var2
+  mutate(abs(mean_df[Var1, ] - mean_df[Var2, ])) # Calculate abs value of Var1 - Var2
+
+# Replace var with Treatment name
+mean_differences <- mean_differences %>% mutate(Var2 = 
+                                                  case_when(str_detect(Var2, '1') ~ "M0_Vehicle",
+                                                            str_detect(Var2, '2') ~ "M2_Vehicle",
+                                                            str_detect(Var2, '3') ~ "M0 -> M1",
+                                                            str_detect(Var2, '4') ~ "M2 -> M1",
+                                                            str_detect(Var2, '5') ~ "M0_DEP", 
+                                                            str_detect(Var2, '6') ~ "M2_DEP", 
+                                                            str_detect(Var2, '7') ~ "M0 -> M1+DEP", 
+                                                            str_detect(Var2, '8') ~ "M2 -> M1+DEP"))
+
+mean_differences <- mean_differences %>% mutate(Var1 = 
+                                                  case_when(str_detect(Var1, '1') ~ "M0_Vehicle",
+                                                            str_detect(Var1, '2') ~ "M2_Vehicle",
+                                                            str_detect(Var1, '3') ~ "M0 -> M1",
+                                                            str_detect(Var1, '4') ~ "M2 -> M1",
+                                                            str_detect(Var1, '5') ~ "M0_DEP", 
+                                                            str_detect(Var1, '6') ~ "M2_DEP", 
+                                                            str_detect(Var1, '7') ~ "M0 -> M1+DEP", 
+                                                            str_detect(Var1, '8') ~ "M2 -> M1+DEP"))
+
+# Isolate comparisons
+comparisons <- mean_differences[1:2]
+colnames(comparisons) <- c('group1', 'group2')
+
+# Set row names to Treatments compared in row
+mean_differences <- data.frame(mean_differences[3:ncol(mean_differences)], 
+                               row.names = paste0(mean_differences$Var2, " : ", mean_differences$Var1))
+
+# Create vectors for storing results of stats
+Data_Test <- vector('list', ncol(MSD))
+anova <- vector('list', ncol(MSD))
+MSE <- vector('list', ncol(MSD))
+t_ratio <- vector('list', ncol(MSD))
+p_val <- vector('list', ncol(MSD))
+
+# Disable scientific notation
+options(scipen=999)
+
+# Run Two-Way RM ANOVA with Fisher LSD
+# t-ratio of comparison = 
+
+# [Difference between Treatments]/
+# sqrt([Mean squares of within group from anova]*(1/n[group1] + 1/n[group2]))
+
+# Individual p-values calculated from the resulting t-ratio with a DF of 8
+for(i in 7:ncol(MSD)) {  
+  
+  # Two-Way RM Anova
+  Data_Test[[i]] <- tidy(aov(MSD[, i] ~ Starting * Exposure 
+                             + Error(ID / (Starting * Exposure))
+                             , data = MSD))
+  
+  # Isolate anova p-value for graphing
+  anova[[i]] <- round(Data_Test[[i]][6, "p.value"], 4)
+  
+  # Rename column to p
+  colnames(anova[[i]])[1] <- 'p'
+  
+  # Set values rounded to below 0.0001 to <0.0001
+  anova[[i]]$p[anova[[i]]$p<0.0001] <- '<0.0001'
+  
+  # Mean Square Error
+  MSE[[i]] <- sqrt(((1/5 + 1/5) * Data_Test[[i]][7,"meansq"]))
+  
+  # t ratio
+  t_ratio[[i]] <- mean_differences[[i-6]]/as.numeric(MSE[[i]])
+  
+  # p-value of two-tailed test, rounded to 4 digits
+  p_val[[i]] <- round(2*pt(t_ratio[[i]], 8, lower.tail = FALSE), 4)
+  
+  # Add comparisons to p-values
+  p_val[[i]] <- data.frame(comparisons, p_val[[i]])
+  
+  # rename p value column to p
+  colnames(p_val[[i]])[3] = 'p'
+  
+  # Set values rounded to below 0.0001 to <0.0001
+  p_val[[i]]$p[p_val[[i]]$p<0.0001] <- '<0.0001'
+  
+  # Add columns to set initial polarization ID
+  p_val[[i]]$Match <- 'NA'
+  
+  # Check groups for matching within initial polarization state
+  # or within final treatment condition and mark as a match for subsetting
+  # For example, comparison of all M0 groups and comparison of M0_Vehicle 
+  # with M2_Vehicle is preserved, while M0_Vehicle vs M2_DEP is not preserved
+  p_val[[i]] <- p_val[[i]] %>% mutate(Match =
+                                        case_when(str_detect(group1, 'M0') &
+                                                    str_detect(group2, 'M0') ~ 'Match',
+                                                  
+                                                  str_detect(group1, 'M2') &
+                                                    str_detect(group2, 'M2') ~ 'Match',
+                                                  
+                                                  str_detect(group1, 'Vehicle') &
+                                                    str_detect(group2, 'Vehicle') ~ 'Match',
+                                                  
+                                                  str_detect(group1, '[\\+]') &
+                                                    str_detect(group2, '[\\+]') ~ 'Match',
+                                                  
+                                                  str_detect(group1, 'M2 -> M1') &
+                                                    str_detect(group2, 'M0 -> M1') & 
+                                                    !str_detect(group1, '[\\+]') ~ 'Match',
+                                                  
+                                                  str_detect(group1, '_DEP') &
+                                                    str_detect(group2, '_DEP') ~ 'Match',
+                                                  
+                                                  TRUE ~ as.character(.$Match)))
+  
+  p_val[[i]] <- subset(p_val[[i]], Match == 'Match')
+  
+}
+
+# Creating a function to calculate the SEM
+stderror <- function(x) sd(x)/sqrt(length(x)) 
+
+# Removing unneeded information from all data, retaining only Treatment ID
+Mean <- MSD[-c(1:3, 5:6)] 
+
+# Calculating the average rounded to 2 sig figs +/- SEM
+Mean = Mean %>% 
+  group_by(Treatment) %>% 
+  summarize(across(everything(), 
+                   function(x) {
+                     paste(round(mean(x),2), 
+                           "\u00b1", 
+                           round(stderror(x), 2))}))
+
+Mean <- data.frame(Mean[,], row.names = Mean$Treatment) # Making results into a data frame
+Mean <- Mean[-c(1)] # Removing treatment column as row names are treatment IDs
+names(Mean) <- gsub("\\.", "", names(Mean)) # Removing . from column names
+Mean <- t(Mean)
+Mean <- as.data.frame(Mean[, c("M0_Vehicle", 'M2_Vehicle', 'M0_DEP', 'M2_DEP',
+                               "M0 -> M1", "M2 -> M1", "M0 -> M1+DEP", "M2 -> M1+DEP")])
+
+# Exporting results into an Excel file
+write.xlsx(Mean, 'MSD_Mean_SEM.xlsx',
+           sheetName = 'Means',
+           row.names = TRUE,
+           append = FALSE)
+```
+
+### Graph cytokine concentration data and add statistics calculated above. Each saved graph corresponds to a single cytokine.
+
+```{r}
+# Order for groups on graph
+level_order <- c("M0_Vehicle", "M0 -> M1", "M0_DEP", "M0 -> M1+DEP",
+                 "M2_Vehicle", "M2 -> M1", "M2_DEP", "M2 -> M1+DEP")
+
+# Set vector for plots to be assigned during loop
+myplot <- vector('list', ncol(MSD)) 
+y_pos <- vector('list', ncol(MSD))
+y_max <- vector('list', ncol(MSD))
+anov_pos <- vector('list', ncol(MSD))
+
+# Identify maximum value of each analyte to set y axis
+max <- sapply(MSD, max)
+max <- as.numeric(max)
+
+# Make a plot for each analyte in a loop
+for(i in 7:ncol(MSD)) {
+  
+  anov_pos[[i]] <- as.numeric(max[[i]]*2.75)
+  
+  y_max[[i]] <- as.numeric(max[[i]]*2.8)
+  
+  y_pos[[i]] <- c(max[[i]]*2.2, 
+                  
+                  max[[i]]*1.15, max[[i]]*1.3, max[[i]]*1.45, 
+                  max[[i]]*1.15, max[[i]]*1.3, max[[i]]*1.45,
+                  
+                  max[[i]]*2.35, 
+                  
+                  max[[i]]*1.6, max[[i]]*1.75, 
+                  max[[i]]*1.6, max[[i]]*1.75,
+                  
+                  max[[i]]*2.5, 
+                  
+                  max[[i]]*1.9, 
+                  max[[i]]*1.9, 
+                  
+                  max[[i]]*2.65)
+  
+  # Make one plot per gene, saving it in myplot location [[i]]
+  myplot[[i]]<- ggplot(MSD, 
+                       aes_string(x = "factor(Treatment, level = level_order)", 
+                                  y = MSD[, i])) + 
+    
+    # Add bars with line at mean
+    geom_bar(aes(col=Treatment), 
+             position = position_dodge(),
+             fill = 'white', 
+             stat = "summary", 
+             fun = "mean", 
+             show.legend = FALSE) +
+    
+    # Add individual data points
+    geom_jitter(aes(col=Treatment), 
+                width = 0.25, 
+                show.legend = FALSE) + 
+    
+    # Add a dashed horizontal line at y=0
+    geom_hline(yintercept=0, 
+               linetype = "dashed") +
+    
+    # Add anova p-value
+    annotate("text", 
+             x = 1.5, 
+             y = anov_pos[[i]], 
+             label = paste0("ANOVA, p = ", anova[[i]])) +
+    
+    # Add the stats saved in statistics data frame
+    stat_pvalue_manual(p_val[[i]], # location where p values are stored
+                       y.position = y_pos[[i]], # where on y axis p values/lines should locate
+                       label = "p", # name of column in t_test[[i]] where p values stored
+                       size = 3.5, # size of labels
+                       bracket.size = 0.01, # thickness of lines
+                       tip.length = 0, # remove tips from lines
+                       vjust = 0.25 # puts p value on comparison line
+                       ) +
+    
+    # Add SEM bars
+    stat_summary(geom = "errorbar", 
+                 fun.data = mean_se, 
+                 position = "dodge", 
+                 width = 0.25) +
+    
+    # y axis limits, calculated in if/else statement
+    ylim(0, y_max[[i]]) +
+    
+    # Label x and y axis
+    labs(title = names(MSD)[i],
+         x = "Treatment", 
+         y = "Concentration (pg/mL)") + 
+    
+    # Set axis label sizing and presentation angle	
+    theme(axis.text.x = element_text(face = "bold", size = 14)) + 
+    theme(axis.text.x = element_text(angle = 90)) +	
+    theme(axis.text.y = element_text(size = 14)) +
+    theme(axis.title.y = element_text(size = 16)) +
+    theme(axis.title.x = element_text(size = 16)) + 
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+    
+    # Sets legend order to match order of x-axis already on graph due to level_order
+    scale_color_discrete(breaks = level_order) 
+  
+  file_name = paste(colnames(MSD)[i], ".tiff", sep="")
+  tiff(file_name, units="in", width=8, height=8, res=300)
+  print(myplot[[i]])
+  dev.off()
+  
+}
+```
