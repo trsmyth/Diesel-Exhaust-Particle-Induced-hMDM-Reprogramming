@@ -2,6 +2,10 @@
 
 This repository contains scripts associated with the February 2024 APSselect article "Diesel exhaust particles induce polarization state-dependent functional and transcriptional changes in human monocyte-derived macrophages" published by the American Journal of Physiology-Lung Cellular and Molecular Physiology, available at: https://doi.org/10.1152/ajplung.00085.2023.
 
+<p align="center">
+  <img width="2000" height="765" alt="image" src="https://github.com/user-attachments/assets/5a76cc0c-b6c0-4acb-9bce-db7e2941c358" />
+</p>
+
 Author: Timothy Smyth
 
 These scripts are presented in separate folders corresponding to specific analyses. The following descriptions are based on the order of appearance in the article.
