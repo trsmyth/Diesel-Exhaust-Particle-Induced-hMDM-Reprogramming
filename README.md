@@ -5,6 +5,9 @@ This repository contains scripts associated with the February 2024 APSselect art
 <p align="center">
   <img width="2000" height="765" alt="image" src="https://github.com/user-attachments/assets/5a76cc0c-b6c0-4acb-9bce-db7e2941c358" />
 </p>
+<div align="right">
+Image created using Biorender.com
+</div>
 
 Author: Timothy Smyth
 
